@@ -85,7 +85,7 @@ func EFISecureBootDBUpdatePrepare(st *state.State, db EFISecurebootKeyDatabase, 
 		return err
 	}
 
-	if err := checkFDEChangeConflict(st, db); err != nil {
+	if err := checkFDEChangeConflict(st); err != nil {
 		return err
 	}
 

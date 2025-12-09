@@ -31,19 +31,15 @@ func isFDETask(t *state.Task) bool {
 	return strings.HasPrefix(t.Kind(), "fde-")
 }
 
-func checkFDEChangeConflict(st *state.State, db EFISecurebootKeyDatabase) error {
+func checkFDEChangeConflict(st *state.State) error {
 	for _, chg := range st.Changes() {
 		if chg.Status().Ready() {
 			continue
 		}
 		switch chg.Kind() {
 		case "fde-efi-secureboot-db-update":
-			updateKindStr := EFISecurebootKeyDatabaseString(db)
 			return &snapstate.ChangeConflictError{
-				Message: fmt.Sprintf(
-					"external EFI %s update in progress, no other FDE changes allowed until this is done",
-					updateKindStr,
-				),
+				Message: "external EFI SecureBoot Key Database update in progress, no other FDE changes allowed until this is done",
 				ChangeKind: chg.Kind(),
 				ChangeID:   chg.ID(),
 			}
