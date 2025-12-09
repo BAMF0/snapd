@@ -131,8 +131,10 @@ func postSystemSecurebootActionJSON(c *Command, r *http.Request) Response {
 var fdestateEFISecureBootDBUpdatePrepare = fdestate.EFISecureBootDBUpdatePrepare
 
 func postSystemActionEFISecurebootUpdateDBPrepare(c *Command, req *securebootRequest) Response {
-	if req.KeyDatabase != "DBX" {
-		return InternalError("support for key database %q is not implemented", req.KeyDatabase)
+	switch req.KeyDatabase {
+	case "PK", "KEK", "DB", "DBX":
+	default:
+		return InternalError("internal error: unexpected key database %q", req.KeyDatabase)
 	}
 
 	payload, err := base64.StdEncoding.DecodeString(req.Payload)
