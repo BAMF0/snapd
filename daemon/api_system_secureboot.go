@@ -84,9 +84,7 @@ func (r *securebootRequest) Validate() error {
 			return fmt.Errorf("unexpected payload for action %q", r.Action)
 		}
 	case "efi-secureboot-update-db-prepare":
-		switch r.KeyDatabase {
-		case "PK", "KEK", "DB", "DBX":
-		default:
+		if (!fdestate.EFISecureBootKeyDatabaseIsSupportedString(r.KeyDatabase)) {
 			return fmt.Errorf("invalid key database %q", r.KeyDatabase)
 		}
 
@@ -131,9 +129,7 @@ func postSystemSecurebootActionJSON(c *Command, r *http.Request) Response {
 var fdestateEFISecureBootDBUpdatePrepare = fdestate.EFISecureBootDBUpdatePrepare
 
 func postSystemActionEFISecurebootUpdateDBPrepare(c *Command, req *securebootRequest) Response {
-	switch req.KeyDatabase {
-	case "PK", "KEK", "DB", "DBX":
-	default:
+	if (!fdestate.EFISecureBootKeyDatabaseIsSupportedString(req.KeyDatabase)) {
 		return InternalError("internal error: unexpected key database %q", req.KeyDatabase)
 	}
 
@@ -142,8 +138,9 @@ func postSystemActionEFISecurebootUpdateDBPrepare(c *Command, req *securebootReq
 		return BadRequest("cannot decode payload: %v", err)
 	}
 
+	db := fdestate.EFISecurebootKeyDatabaseFromString(req.KeyDatabase)
 	err = fdestateEFISecureBootDBUpdatePrepare(c.d.state,
-		fdestate.EFISecurebootDBX, // only DBX updates are supported
+		db,
 		payload)
 	if err != nil {
 		return BadRequest("cannot notify of update prepare: %v", err)
