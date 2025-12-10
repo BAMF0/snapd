@@ -47,7 +47,20 @@ import (
 	"github.com/snapcore/snapd/timings"
 )
 
-func (s *fdeMgrSuite) TestEFIDBXNoSealedKeys(c *C) {
+// ideally, we would want to iterate over all kinds in a single test
+// for extensibility, but due to the way state is managed in tests, we need
+// to have separate functions for each kind in some cases
+var securebootUpdateKinds = []fdestate.EFISecurebootKeyDatabase{
+	fdestate.EFISecurebootPK,
+	fdestate.EFISecurebootKEK,
+	fdestate.EFISecurebootDB,
+	fdestate.EFISecurebootDBX,
+}
+
+func (s *fdeMgrSuite) testEFISecureBootNoSealedKeysForKind(
+	c *C,
+	kind fdestate.EFISecurebootKeyDatabase,
+) {
 	// no sealed keys in the system, all operations are NOP
 	_, err := device.SealedKeysMethod(dirs.GlobalRootDir)
 	// make sure the state is true
@@ -71,14 +84,21 @@ func (s *fdeMgrSuite) TestEFIDBXNoSealedKeys(c *C) {
 	err = fdestate.EFISecureBootDBManagerStartup(st)
 	c.Assert(err, IsNil)
 
-	err = fdestate.EFISecureBootDBUpdatePrepare(st, fdestate.EFISecurebootDBX, []byte("payload"))
+	err = fdestate.EFISecureBootDBUpdatePrepare(st, kind, []byte("payload"))
 	c.Assert(err, IsNil)
 
 	err = fdestate.EFISecureBootDBUpdateCleanup(st)
 	c.Assert(err, IsNil)
+
 }
 
-func (s *fdeMgrSuite) TestEFIDBXStartupClean(c *C) {
+func (s *fdeMgrSuite) TestEFISecureBootNoSealedKeysAllKinds(c *C) {
+	for _, kind := range securebootUpdateKinds {
+		s.testEFISecureBootNoSealedKeysForKind(c, kind)
+	}
+}
+
+func (s *fdeMgrSuite) TestEFISecureBootStartupClean(c *C) {
 	c.Assert(device.StampSealedKeys(dirs.GlobalRootDir, device.SealingMethodTPM), IsNil)
 
 	st := s.st
@@ -102,7 +122,10 @@ func (s *fdeMgrSuite) TestEFIDBXStartupClean(c *C) {
 	c.Check(fdeSt.PendingExternalOperations, HasLen, 0)
 }
 
-func (s *fdeMgrSuite) TestEFIDBXPrepareHappy(c *C) {
+func (s *fdeMgrSuite) testEFISecureBootPrepareHappyForKind(
+	c *C,
+	kind fdestate.EFISecurebootKeyDatabase,
+) {
 	c.Assert(device.StampSealedKeys(dirs.GlobalRootDir, device.SealingMethodTPM), IsNil)
 
 	st := s.st
@@ -137,7 +160,7 @@ func (s *fdeMgrSuite) TestEFIDBXPrepareHappy(c *C) {
 	s.o.Loop()
 	defer s.o.Stop()
 
-	err := fdestate.EFISecureBootDBUpdatePrepare(st, fdestate.EFISecurebootDBX, []byte("payload"))
+	err := fdestate.EFISecureBootDBUpdatePrepare(st, kind, []byte("payload"))
 	c.Assert(err, IsNil)
 
 	st.Lock()
@@ -200,7 +223,24 @@ func (s *fdeMgrSuite) TestEFIDBXPrepareHappy(c *C) {
 	c.Check(tsks[1].WaitTasks(), DeepEquals, []*state.Task{tsks[0]})
 }
 
-func (s *fdeMgrSuite) TestEFIDBXPrepareConflictSelf(c *C) {
+// each PrepareHappy test requires a separate function to reinitialize state correctly
+func (s *fdeMgrSuite) TestEFISecureBootPrepareHappyPK(c *C) {
+	s.testEFISecureBootPrepareHappyForKind(c, fdestate.EFISecurebootPK)
+}
+func (s *fdeMgrSuite) TestEFISecureBootPrepareHappyKEK(c *C) {
+	s.testEFISecureBootPrepareHappyForKind(c, fdestate.EFISecurebootKEK)
+}
+func (s *fdeMgrSuite) TestEFISecureBootPrepareHappyDB(c *C) {
+	s.testEFISecureBootPrepareHappyForKind(c, fdestate.EFISecurebootDB)
+}
+func (s *fdeMgrSuite) TestEFISecureBootPrepareHappyDBX(c *C) {
+	s.testEFISecureBootPrepareHappyForKind(c, fdestate.EFISecurebootDBX)
+}
+
+func (s *fdeMgrSuite) testEFISecureBootPrepareConflictSelfForKind(
+	c *C,
+	kind fdestate.EFISecurebootKeyDatabase,
+) {
 	c.Assert(device.StampSealedKeys(dirs.GlobalRootDir, device.SealingMethodTPM), IsNil)
 
 	st := s.st
@@ -225,7 +265,7 @@ func (s *fdeMgrSuite) TestEFIDBXPrepareConflictSelf(c *C) {
 	s.o.Loop()
 	defer s.o.Stop()
 
-	err := fdestate.EFISecureBootDBUpdatePrepare(st, fdestate.EFISecurebootDBX, []byte("payload"))
+	err := fdestate.EFISecureBootDBUpdatePrepare(st, kind, []byte("payload"))
 	c.Assert(err, IsNil)
 
 	st.Lock()
@@ -242,15 +282,36 @@ func (s *fdeMgrSuite) TestEFIDBXPrepareConflictSelf(c *C) {
 	err = func() error {
 		st.Unlock()
 		defer st.Lock()
-		return fdestate.EFISecureBootDBUpdatePrepare(st, fdestate.EFISecurebootDBX, []byte("payload"))
+		return fdestate.EFISecureBootDBUpdatePrepare(st, kind, []byte("payload"))
 	}()
 	c.Assert(err, DeepEquals, &snapstate.ChangeConflictError{
 		ChangeKind: "fde-efi-secureboot-db-update",
-		Message:    "cannot start a new DBX update when conflicting actions are in progress",
+		Message: fmt.Sprintf(
+			"cannot start a new %s update when conflicting actions are in progress",
+			fdestate.EFISecurebootKeyDatabaseString(kind),
+		),
 	})
 }
 
-func (s *fdeMgrSuite) TestEFIDBXPrepareConflictFDEChange(c *C) {
+// each PrepareConflictSelf test requires a separate function to reinitialize
+// state correctly
+func (s *fdeMgrSuite) TestEFISecureBootPrepareConflictSelfPK(c *C) {
+	s.testEFISecureBootPrepareConflictSelfForKind(c, fdestate.EFISecurebootPK)
+}
+func (s *fdeMgrSuite) TestEFISecureBootPrepareConflictSelfKEK(c *C) {
+	s.testEFISecureBootPrepareConflictSelfForKind(c, fdestate.EFISecurebootKEK)
+}
+func (s *fdeMgrSuite) TestEFISecureBootPrepareConflictSelfDB(c *C) {
+	s.testEFISecureBootPrepareConflictSelfForKind(c, fdestate.EFISecurebootDB)
+}
+func (s *fdeMgrSuite) TestEFISecureBootPrepareConflictSelfDBX(c *C) {
+	s.testEFISecureBootPrepareConflictSelfForKind(c, fdestate.EFISecurebootDBX)
+}
+
+func (s *fdeMgrSuite) testEFISecureBootConflictFDEChangeForKind(
+	c *C,
+	kind fdestate.EFISecurebootKeyDatabase,
+) {
 	c.Assert(device.StampSealedKeys(dirs.GlobalRootDir, device.SealingMethodTPM), IsNil)
 
 	st := s.st
@@ -264,11 +325,17 @@ func (s *fdeMgrSuite) TestEFIDBXPrepareConflictFDEChange(c *C) {
 	chg.AddTask(tsk)
 	st.Unlock()
 
-	err := fdestate.EFISecureBootDBUpdatePrepare(st, fdestate.EFISecurebootDBX, []byte("payload"))
+	err := fdestate.EFISecureBootDBUpdatePrepare(st, kind, []byte("payload"))
 	c.Assert(err, ErrorMatches, "FDE change in progress, no other FDE changes allowed until this is done")
 }
 
-func (s *fdeMgrSuite) TestEFIDBXPrepareConflictOperationNotInDoingYet(c *C) {
+func (s *fdeMgrSuite) TestEFISecureBootPrepareConflictFDEChangeAllKinds(c *C) {
+	for _, kind := range securebootUpdateKinds {
+		s.testEFISecureBootConflictFDEChangeForKind(c, kind)
+	}
+}
+
+func (s *fdeMgrSuite) TestEFISecureBootPrepareConflictOperationNotInDoingYet(c *C) {
 	// attempting to run cleanup or startup when the operation has not yet
 	// reached Doing status raises a conflict
 	c.Assert(device.StampSealedKeys(dirs.GlobalRootDir, device.SealingMethodTPM), IsNil)
@@ -316,7 +383,10 @@ func (s *fdeMgrSuite) TestEFIDBXPrepareConflictOperationNotInDoingYet(c *C) {
 	})
 }
 
-func (s *fdeMgrSuite) TestEFIDBXPrepareConflictSnapChanges(c *C) {
+func (s *fdeMgrSuite) testEFISecureBootPrepareConflictSnapChangesForKind(
+	c *C,
+	kind fdestate.EFISecurebootKeyDatabase,
+) {
 	c.Assert(device.StampSealedKeys(dirs.GlobalRootDir, device.SealingMethodTPM), IsNil)
 
 	st := s.st
@@ -359,7 +429,7 @@ func (s *fdeMgrSuite) TestEFIDBXPrepareConflictSnapChanges(c *C) {
 
 	st.Unlock()
 	defer st.Lock()
-	err = fdestate.EFISecureBootDBUpdatePrepare(st, fdestate.EFISecurebootDBX, []byte("payload"))
+	err = fdestate.EFISecureBootDBUpdatePrepare(st, kind, []byte("payload"))
 	c.Assert(err, DeepEquals, &snapstate.ChangeConflictError{
 		ChangeKind: "kernel-snap-remove",
 		Snap:       "pc-kernel",
@@ -367,7 +437,23 @@ func (s *fdeMgrSuite) TestEFIDBXPrepareConflictSnapChanges(c *C) {
 	})
 }
 
-func (s *fdeMgrSuite) TestEFIDBXUpdateAndCleanupRunningAction(c *C) {
+func (s *fdeMgrSuite) TestEFISecureBootPrepareConflictSnapChangesPK(c *C) {
+	s.testEFISecureBootPrepareConflictSnapChangesForKind(c, fdestate.EFISecurebootPK)
+}
+func (s *fdeMgrSuite) TestEFISecureBootPrepareConflictSnapChangesKEK(c *C) {
+	s.testEFISecureBootPrepareConflictSnapChangesForKind(c, fdestate.EFISecurebootKEK)
+}
+func (s *fdeMgrSuite) TestEFISecureBootPrepareConflictSnapChangesDB(c *C) {
+	s.testEFISecureBootPrepareConflictSnapChangesForKind(c, fdestate.EFISecurebootDB)
+}
+func (s *fdeMgrSuite) TestEFISecureBootPrepareConflictSnapChangesDBX(c *C) {
+	s.testEFISecureBootPrepareConflictSnapChangesForKind(c, fdestate.EFISecurebootDBX)
+}
+
+func (s *fdeMgrSuite) testEFISecureBootUpdateAndCleanupRunningActionForKind(
+	c *C,
+	kind fdestate.EFISecurebootKeyDatabase,
+) {
 	c.Assert(device.StampSealedKeys(dirs.GlobalRootDir, device.SealingMethodTPM), IsNil)
 
 	st := s.st
@@ -413,7 +499,7 @@ func (s *fdeMgrSuite) TestEFIDBXUpdateAndCleanupRunningAction(c *C) {
 	s.o.Loop()
 	defer s.o.Stop()
 
-	err := fdestate.EFISecureBootDBUpdatePrepare(st, fdestate.EFISecurebootDBX, []byte("payload"))
+	err := fdestate.EFISecureBootDBUpdatePrepare(st, kind, []byte("payload"))
 	c.Assert(err, IsNil)
 
 	st.Lock()
@@ -498,7 +584,23 @@ func (s *fdeMgrSuite) TestEFIDBXUpdateAndCleanupRunningAction(c *C) {
 	c.Check(fdeStAfterCleanup.PendingExternalOperations, HasLen, 0)
 }
 
-func (s *fdeMgrSuite) TestEFIDBXUpdateAndUnexpectedStartupAction(c *C) {
+func (s *fdeMgrSuite) TestEFISecureBootUpdateAndCleanupRunningActionPK(c *C) {
+	s.testEFISecureBootUpdateAndCleanupRunningActionForKind(c, fdestate.EFISecurebootPK)
+}
+func (s *fdeMgrSuite) TestEFISecureBootUpdateAndCleanupRunningActionKEK(c *C) {
+	s.testEFISecureBootUpdateAndCleanupRunningActionForKind(c, fdestate.EFISecurebootKEK)
+}
+func (s *fdeMgrSuite) TestEFISecureBootUpdateAndCleanupRunningActionDB(c *C) {
+	s.testEFISecureBootUpdateAndCleanupRunningActionForKind(c, fdestate.EFISecurebootDB)
+}
+func (s *fdeMgrSuite) TestEFISecureBootUpdateAndCleanupRunningActionDBX(c *C) {
+	s.testEFISecureBootUpdateAndCleanupRunningActionForKind(c, fdestate.EFISecurebootDBX)
+}
+
+func (s *fdeMgrSuite) testEFISecureBootUpdateAndUnexpectedStartupActionForKind(
+	c *C,
+	kind fdestate.EFISecurebootKeyDatabase,
+) {
 	c.Assert(device.StampSealedKeys(dirs.GlobalRootDir, device.SealingMethodTPM), IsNil)
 
 	st := s.st
@@ -544,7 +646,7 @@ func (s *fdeMgrSuite) TestEFIDBXUpdateAndUnexpectedStartupAction(c *C) {
 	s.o.Loop()
 	defer s.o.Stop()
 
-	err := fdestate.EFISecureBootDBUpdatePrepare(st, fdestate.EFISecurebootDBX, []byte("payload"))
+	err := fdestate.EFISecureBootDBUpdatePrepare(st, kind, []byte("payload"))
 	c.Assert(err, IsNil)
 
 	st.Lock()
@@ -636,8 +738,14 @@ func (s *fdeMgrSuite) TestEFIDBXUpdateAndUnexpectedStartupAction(c *C) {
 	// change has an error now
 	c.Check(chg.IsReady(), Equals, true)
 	c.Check(chg.Status(), Equals, state.ErrorStatus)
-	c.Check(chg.Err(), ErrorMatches, "cannot perform the following tasks:\n"+
-		"- Reseal after external EFI DBX update .'startup' action invoked while an operation is in progress.")
+	updateKindstr := fdestate.EFISecurebootKeyDatabaseString(kind)
+	c.Check(chg.Err(), ErrorMatches, 
+		"cannot perform the following tasks:\n"+
+		fmt.Sprintf(
+			"- Reseal after external EFI %s update .'startup' action invoked while an operation is in progress.", 
+			updateKindstr,
+		),
+	)
 	c.Check(tsk.Status(), Equals, state.ErrorStatus)
 
 	// this should return immediately, as the operation has completed
@@ -661,7 +769,23 @@ func (s *fdeMgrSuite) TestEFIDBXUpdateAndUnexpectedStartupAction(c *C) {
 	c.Check(fdeStAfterCleanup.PendingExternalOperations, HasLen, 0)
 }
 
-func (s *fdeMgrSuite) TestEFIDBXUpdateAbort(c *C) {
+func (s *fdeMgrSuite) TestEFISecureBootUpdateAndUnexpectedStartupActionPK(c *C) {
+	s.testEFISecureBootUpdateAndUnexpectedStartupActionForKind(c, fdestate.EFISecurebootPK)
+}
+func (s *fdeMgrSuite) TestEFISecureBootUpdateAndUnexpectedStartupActionKEK(c *C) {
+	s.testEFISecureBootUpdateAndUnexpectedStartupActionForKind(c, fdestate.EFISecurebootKEK)
+}
+func (s *fdeMgrSuite) TestEFISecureBootUpdateAndUnexpectedStartupActionDB(c *C) {
+	s.testEFISecureBootUpdateAndUnexpectedStartupActionForKind(c, fdestate.EFISecurebootDB)
+}
+func (s *fdeMgrSuite) TestEFISecureBootUpdateAndUnexpectedStartupActionDBX(c *C) {
+	s.testEFISecureBootUpdateAndUnexpectedStartupActionForKind(c, fdestate.EFISecurebootDBX)
+}
+
+func (s *fdeMgrSuite) testEFISecureBootUpdateAbortForKind(
+	c *C, 
+	kind fdestate.EFISecurebootKeyDatabase,
+) {
 	// simulate a case when prepare is requested, but neither cleanup nor
 	// startup is called, the change will wait till it is auto aborted
 
@@ -699,7 +823,7 @@ func (s *fdeMgrSuite) TestEFIDBXUpdateAbort(c *C) {
 	s.o.Loop()
 	defer s.o.Stop()
 
-	err := fdestate.EFISecureBootDBUpdatePrepare(st, fdestate.EFISecurebootDBX, []byte("payload"))
+	err := fdestate.EFISecureBootDBUpdatePrepare(st, kind, []byte("payload"))
 	c.Assert(err, IsNil)
 
 	st.Lock()
@@ -782,7 +906,23 @@ func (s *fdeMgrSuite) TestEFIDBXUpdateAbort(c *C) {
 	c.Check(fdeStAfterCleanup.PendingExternalOperations, HasLen, 0)
 }
 
-func (s *fdeMgrSuite) TestEFIDBXUpdateResealFailedAborts(c *C) {
+func (s *fdeMgrSuite) TestEFISecureBootUpdateAbortPK(c *C) {
+	s.testEFISecureBootUpdateAbortForKind(c, fdestate.EFISecurebootPK)
+}
+func (s *fdeMgrSuite) TestEFISecureBootUpdateAbortKEK(c *C) {
+	s.testEFISecureBootUpdateAbortForKind(c, fdestate.EFISecurebootKEK)
+}
+func (s *fdeMgrSuite) TestEFISecureBootUpdateAbortDB(c *C) {
+	s.testEFISecureBootUpdateAbortForKind(c, fdestate.EFISecurebootDB)
+}
+func (s *fdeMgrSuite) TestEFISecureBootUpdateAbortDBX(c *C) {
+	s.testEFISecureBootUpdateAbortForKind(c, fdestate.EFISecurebootDBX)
+}
+
+func (s *fdeMgrSuite) testEFISecureBootUpdateResealFailedAbortsForKind(
+	c *C,
+	kind fdestate.EFISecurebootKeyDatabase,
+) {
 	c.Assert(device.StampSealedKeys(dirs.GlobalRootDir, device.SealingMethodTPM), IsNil)
 
 	st := s.st
@@ -815,7 +955,7 @@ func (s *fdeMgrSuite) TestEFIDBXUpdateResealFailedAborts(c *C) {
 	s.o.Loop()
 	defer s.o.Stop()
 
-	err := fdestate.EFISecureBootDBUpdatePrepare(st, fdestate.EFISecurebootDBX, []byte("payload"))
+	err := fdestate.EFISecureBootDBUpdatePrepare(st, kind, []byte("payload"))
 	c.Assert(err, ErrorMatches, "(?sm).*cannot perform initial reseal of keys for SecureBoot Key Database update: mock error.*")
 
 	st.Lock()
@@ -841,11 +981,34 @@ func (s *fdeMgrSuite) TestEFIDBXUpdateResealFailedAborts(c *C) {
 	chg := chgs[0]
 	c.Check(chg.IsReady(), Equals, true)
 	c.Check(chg.Status(), Equals, state.ErrorStatus)
-	c.Check(chg.Err(), ErrorMatches, "cannot perform the following tasks:\n"+
-		"- Prepare for external EFI DBX update .cannot perform initial reseal of keys for SecureBoot Key Database update: mock error.")
+	updateKindstr := fdestate.EFISecurebootKeyDatabaseString(kind)
+	c.Check(chg.Err(), ErrorMatches, 
+		"cannot perform the following tasks:\n"+
+		fmt.Sprintf(
+			"- Prepare for external EFI %s update " +
+			".cannot perform initial reseal of keys for SecureBoot Key Database update: mock error.", 
+			updateKindstr,
+		),
+	)
 }
 
-func (s *fdeMgrSuite) TestEFIDBXUpdatePostUpdateResealFailed(c *C) {
+func (s *fdeMgrSuite) TestEFISecureBootUpdateResealFailedAbortsPK(c *C) {
+	s.testEFISecureBootUpdateResealFailedAbortsForKind(c, fdestate.EFISecurebootPK)
+}
+func (s *fdeMgrSuite) TestEFISecureBootUpdateResealFailedAbortsKEK(c *C) {
+	s.testEFISecureBootUpdateResealFailedAbortsForKind(c, fdestate.EFISecurebootKEK)
+}
+func (s *fdeMgrSuite) TestEFISecureBootUpdateResealFailedAbortsDB(c *C) {
+	s.testEFISecureBootUpdateResealFailedAbortsForKind(c, fdestate.EFISecurebootDB)
+}
+func (s *fdeMgrSuite) TestEFISecureBootUpdateResealFailedAbortsDBX(c *C) {
+	s.testEFISecureBootUpdateResealFailedAbortsForKind(c, fdestate.EFISecurebootDBX)
+}
+
+func (s *fdeMgrSuite) testEFISecureBootUpdatePostUpdateResealFailedForKind(
+	c *C,
+	kind fdestate.EFISecurebootKeyDatabase,
+) {
 	// mock an error in a reseal which happens in the 'do' handler after snapd
 	// has been notified of a completed update
 	c.Assert(device.StampSealedKeys(dirs.GlobalRootDir, device.SealingMethodTPM), IsNil)
@@ -880,7 +1043,7 @@ func (s *fdeMgrSuite) TestEFIDBXUpdatePostUpdateResealFailed(c *C) {
 	s.o.Loop()
 	defer s.o.Stop()
 
-	err := fdestate.EFISecureBootDBUpdatePrepare(st, fdestate.EFISecurebootDBX, []byte("payload"))
+	err := fdestate.EFISecureBootDBUpdatePrepare(st, kind, []byte("payload"))
 	c.Assert(err, IsNil)
 
 	st.Lock()
@@ -945,14 +1108,35 @@ func (s *fdeMgrSuite) TestEFIDBXUpdatePostUpdateResealFailed(c *C) {
 	// and we have change in the state, but it is in an error status already
 	c.Check(chg.IsReady(), Equals, true)
 	c.Check(chg.Status(), Equals, state.ErrorStatus)
+	updateKindstr := fdestate.EFISecurebootKeyDatabaseString(kind)
 	c.Check(chg.Err(), ErrorMatches, "cannot perform the following tasks:\n"+
-		// error logged in the task
-		"- Reseal after external EFI DBX update .cannot complete post update reseal: mock error.\n"+
-		// actual error
-		"- Reseal after external EFI DBX update .mock error.")
+		fmt.Sprintf(
+			// error logged in the task
+			"- Reseal after external EFI %s update .cannot complete post update reseal: mock error.\n"+
+			// actual error
+			"- Reseal after external EFI %s update .mock error.",
+			updateKindstr, updateKindstr,
+		),
+	)
 }
 
-func (s *fdeMgrSuite) TestEFIDBXUpdateUndoResealFails(c *C) {
+func (s *fdeMgrSuite) TestEFISecureBootUpdatePostUpdateResealFailedPK(c *C) {
+	s.testEFISecureBootUpdatePostUpdateResealFailedForKind(c, fdestate.EFISecurebootPK)
+}
+func (s *fdeMgrSuite) TestEFISecureBootUpdatePostUpdateResealFailedKEK(c *C) {
+	s.testEFISecureBootUpdatePostUpdateResealFailedForKind(c, fdestate.EFISecurebootKEK)
+}
+func (s *fdeMgrSuite) TestEFISecureBootUpdatePostUpdateResealFailedDB(c *C) {
+	s.testEFISecureBootUpdatePostUpdateResealFailedForKind(c, fdestate.EFISecurebootDB)
+}
+func (s *fdeMgrSuite) TestEFISecureBootUpdatePostUpdateResealFailedDBX(c *C) {
+	s.testEFISecureBootUpdatePostUpdateResealFailedForKind(c, fdestate.EFISecurebootDBX)
+}
+
+func (s *fdeMgrSuite) testEFISecureBootUpdateUndoResealFailsForKind(
+	c *C,
+	kind fdestate.EFISecurebootKeyDatabase,
+) {
 	// mock an error in a reseal which happens in the 'undo' path after snapd
 	// has been notified of a restart in the external DBX manager process
 	c.Assert(device.StampSealedKeys(dirs.GlobalRootDir, device.SealingMethodTPM), IsNil)
@@ -988,7 +1172,7 @@ func (s *fdeMgrSuite) TestEFIDBXUpdateUndoResealFails(c *C) {
 	s.o.Loop()
 	defer s.o.Stop()
 
-	err := fdestate.EFISecureBootDBUpdatePrepare(st, fdestate.EFISecurebootDBX, []byte("payload"))
+	err := fdestate.EFISecureBootDBUpdatePrepare(st, kind, []byte("payload"))
 	c.Assert(err, IsNil)
 
 	st.Lock()
@@ -1053,13 +1237,32 @@ func (s *fdeMgrSuite) TestEFIDBXUpdateUndoResealFails(c *C) {
 	// and we have change in the state, but it is in an error status already
 	c.Check(chg.IsReady(), Equals, true)
 	c.Check(chg.Status(), Equals, state.ErrorStatus)
+	updateKindstr := fdestate.EFISecurebootKeyDatabaseString(kind)
 	c.Check(chg.Err(), ErrorMatches, "cannot perform the following tasks:\n"+
 		// undo failure
-		"- Prepare for external EFI DBX update .cannot complete reseal in undo: mock error.\n"+
-		"- Reseal after external EFI DBX update .'startup' action invoked while an operation is in progress.")
+		fmt.Sprintf(
+			"- Prepare for external EFI %s update .cannot complete reseal in undo: mock error.\n"+
+			"- Reseal after external EFI %s update .'startup' action invoked while an operation is in progress.",
+			updateKindstr, updateKindstr,
+		),
+	)
 }
 
-func (s *fdeMgrSuite) TestEFIDBXCleanupNoChange(c *C) {
+func (s *fdeMgrSuite) TestEFISecureBootUpdateUndoResealFailsPK(c *C) {
+	s.testEFISecureBootUpdateUndoResealFailsForKind(c, fdestate.EFISecurebootPK)
+}
+func (s *fdeMgrSuite) TestEFISecureBootUpdateUndoResealFailsKEK(c *C) {
+	s.testEFISecureBootUpdateUndoResealFailsForKind(c, fdestate.EFISecurebootKEK)
+}
+func (s *fdeMgrSuite) TestEFISecureBootUpdateUndoResealFailsDB(c *C) {
+	s.testEFISecureBootUpdateUndoResealFailsForKind(c, fdestate.EFISecurebootDB)
+}
+func (s *fdeMgrSuite) TestEFISecureBootUpdateUndoResealFailsDBX(c *C) {
+	s.testEFISecureBootUpdateUndoResealFailsForKind(c, fdestate.EFISecurebootDBX)
+}
+
+
+func (s *fdeMgrSuite) TestEFISecureBootCleanupNoChange(c *C) {
 	c.Assert(device.StampSealedKeys(dirs.GlobalRootDir, device.SealingMethodTPM), IsNil)
 
 	st := s.st
@@ -1169,7 +1372,7 @@ type: gadget
 	return model
 }
 
-func (s *fdeMgrSuite) TestEFIDBXBlockedTasks(c *C) {
+func (s *fdeMgrSuite) TestEFISecureBootBlockedTasks(c *C) {
 	c.Assert(device.StampSealedKeys(dirs.GlobalRootDir, device.SealingMethodTPM), IsNil)
 
 	st := s.st
@@ -1213,7 +1416,10 @@ func (s *fdeMgrSuite) TestEFIDBXBlockedTasks(c *C) {
 	st.Lock()
 }
 
-func (s *fdeMgrSuite) TestEFIDBXOperationAddWait(c *C) {
+func (s *fdeMgrSuite) testEFISecureBootOperationAddWaitForKind(
+	c *C,
+	kind fdestate.EFISecurebootKeyDatabase,
+) {
 	// add 2 changes, ant exercise the notification mechanism
 	c.Assert(device.StampSealedKeys(dirs.GlobalRootDir, device.SealingMethodTPM), IsNil)
 
@@ -1227,14 +1433,14 @@ func (s *fdeMgrSuite) TestEFIDBXOperationAddWait(c *C) {
 	op1, err := fdestate.AddEFISecurebootDBUpdateChange(
 		st,
 		device.SealingMethodTPM,
-		fdestate.EFISecurebootDBX,
+		kind,
 		[]byte("payload 1"),
 	)
 	c.Assert(err, IsNil)
 
 	op2, err := fdestate.AddEFISecurebootDBUpdateChange(st,
 		device.SealingMethodTPM,
-		fdestate.EFISecurebootDBX,
+		kind,
 		[]byte("payload 2"),
 	)
 	c.Assert(err, IsNil)
@@ -1269,7 +1475,20 @@ func (s *fdeMgrSuite) TestEFIDBXOperationAddWait(c *C) {
 	<-doneC
 }
 
-func (s *fdeMgrSuite) TestEFIDBXUpdateAffectedSnaps(c *C) {
+func (s *fdeMgrSuite) TestEFISecureBootOperationAddWaitPK(c *C) {
+	s.testEFISecureBootOperationAddWaitForKind(c, fdestate.EFISecurebootPK)
+}
+func (s *fdeMgrSuite) TestEFISecureBootOperationAddWaitKEK(c *C) {
+	s.testEFISecureBootOperationAddWaitForKind(c, fdestate.EFISecurebootKEK)
+}
+func (s *fdeMgrSuite) TestEFISecureBootOperationAddWaitDB(c *C) {
+	s.testEFISecureBootOperationAddWaitForKind(c, fdestate.EFISecurebootDB)
+}
+func (s *fdeMgrSuite) TestEFISecureBootOperationAddWaitDBX(c *C) {
+	s.testEFISecureBootOperationAddWaitForKind(c, fdestate.EFISecurebootDBX)
+}
+
+func (s *fdeMgrSuite) TestEFISecureBootUpdateAffectedSnaps(c *C) {
 	// add 2 changes, ant exercise the notification mechanism
 	c.Assert(device.StampSealedKeys(dirs.GlobalRootDir, device.SealingMethodTPM), IsNil)
 
@@ -1294,7 +1513,10 @@ func (s *fdeMgrSuite) TestEFIDBXUpdateAffectedSnaps(c *C) {
 	})
 }
 
-func (s *fdeMgrSuite) TestEFIDBXConflictingSnaps(c *C) {
+func (s *fdeMgrSuite) testEFISecureBootConflictingSnapsForKind(
+	c *C,
+	kind fdestate.EFISecurebootKeyDatabase,
+) {
 	// mock an error in a reseal which happens in the 'undo' path after snapd
 	// has been notified of a restart in the external DBX manager process
 	c.Assert(device.StampSealedKeys(dirs.GlobalRootDir, device.SealingMethodTPM), IsNil)
@@ -1334,7 +1556,7 @@ func (s *fdeMgrSuite) TestEFIDBXConflictingSnaps(c *C) {
 	s.o.Loop()
 	defer s.o.Stop()
 
-	err := fdestate.EFISecureBootDBUpdatePrepare(st, fdestate.EFISecurebootDBX, []byte("payload"))
+	err := fdestate.EFISecureBootDBUpdatePrepare(st, kind, []byte("payload"))
 	c.Assert(err, IsNil)
 
 	st.Lock()
@@ -1387,7 +1609,19 @@ type: app
 			c.Check(err, IsNil)
 		}
 	}
+}
 
+func (s *fdeMgrSuite) TestEFISecureBootConflictingSnapsPK(c *C) {
+	s.testEFISecureBootConflictingSnapsForKind(c, fdestate.EFISecurebootPK)
+}
+func (s *fdeMgrSuite) TestEFISecureBootConflictingSnapsKEK(c *C) {
+	s.testEFISecureBootConflictingSnapsForKind(c, fdestate.EFISecurebootKEK)
+}
+func (s *fdeMgrSuite) TestEFISecureBootConflictingSnapsDB(c *C) {
+	s.testEFISecureBootConflictingSnapsForKind(c, fdestate.EFISecurebootDB)
+}
+func (s *fdeMgrSuite) TestEFISecureBootConflictingSnapsDBX(c *C) {
+	s.testEFISecureBootConflictingSnapsForKind(c, fdestate.EFISecurebootDBX)
 }
 
 func iterateUnlockedStateWaitingFor(st *state.State, pred func() bool) {
